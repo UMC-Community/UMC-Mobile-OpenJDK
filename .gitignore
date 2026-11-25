@@ -23,8 +23,5 @@
 .vscode/
 .DS_Store
 
-# User-provided test audio (not tracked)
-/android/demo-app/src/main/assets/test.mp3
-
 # Compiled test classes
 /common/tests/classes/
