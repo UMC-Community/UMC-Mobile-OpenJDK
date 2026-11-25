@@ -43,8 +43,12 @@ Two ABIs are supported: `arm64-v8a` (devices) and `x86_64` (emulators). At runti
 
 The demo app is labelled **Test Demo**. On launch it extracts the JRE, creates the JVM and
 runs the smoke checks (JVM info, fonts, sound, Process). If every check succeeds it plays
-`assets/test.mp3` (a bundled one-second test tone); if any check fails the audio is skipped
-and the failure is shown on screen.
+`assets/test.mp3`, a bundled one-second **Boeing 737 windshear aural warning**. If the user
+hears that alarm, audio output is verified. If any check fails, the audio is skipped and the
+failure is shown on screen.
+
+Note: the in-JVM `javax.sound` probe also emits a short 880 Hz tone before the alarm plays;
+that tone verifies the AAudio backend, while the alarm is the user-facing audio check.
 
 ## AWT fonts: fontconfig shipped inside the JRE
 

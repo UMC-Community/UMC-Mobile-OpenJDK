@@ -103,6 +103,8 @@ public class MainActivity extends Activity {
             if (allGood) {
                 append("\nDONE ✅");
                 append("audio: all checks passed, playing test.mp3");
+                append("audio: if you hear the Boeing 737 windshear alarm,");
+                append("audio: your audio output is working ✅");
                 main.post(this::playSuccessAudio);
             } else {
                 append("\nDONE ❌");
@@ -136,11 +138,12 @@ public class MainActivity extends Activity {
             }
             player = new MediaPlayer();
             player.setDataSource(out.getAbsolutePath());
-            player.setOnCompletionListener(mp -> append("audio: playback finished"));
+            player.setOnCompletionListener(mp ->
+                    append("audio: alarm finished — audio passed if you heard it"));
             player.prepare();
             player.start();
-            append("audio: playing test.mp3 ✅");
-            Log.i(TAG, "audio playing test.mp3");
+            append("audio: playing windshear alarm ...");
+            Log.i(TAG, "audio: Boeing 737 windshear alarm playing");
         } catch (Throwable t) {
             append("audio: playback failed: " + t);
             Log.e(TAG, "audio playback failed", t);
