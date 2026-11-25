@@ -1,0 +1,18 @@
+{
+  "_comment": "Per-platform upstream pins. Status: proposed / pinned / deferred. Keep docs/decisions/ in sync.",
+  "android": {
+    "repository": "https://github.com/openjdk/jdk21u",
+    "ref": "jdk-21.0.14+3",
+    "feature_version": 21,
+    "status": "proposed",
+    "notes": "Java 21 LTS, matching UMC / Minecraft requirements. No mobile port; the Bionic patch set is maintained in this repository."
+  },
+  "ios": {
+    "repository": "https://github.com/openjdk/mobile",
+    "ref": "c13417aa36f8f44755d0984b58aa735d0b41f233",
+    "ref_date": "2026-11-25",
+    "feature_version": 28,
+    "status": "deferred",
+    "notes": "The only maintained iOS port, tracking JDK mainline (28-dev); no tags and no 21 branch. Requires macOS + Xcode + the Gluon support zip. Whether to backport 21 is covered by ADR-0001."
+  }
+}

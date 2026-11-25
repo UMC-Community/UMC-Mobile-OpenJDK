@@ -1,0 +1,927 @@
+diff --git a/make/autoconf/flags-cflags.m4 b/make/autoconf/flags-cflags.m4
+index 67731c8ae..6f50524d3 100644
+--- a/make/autoconf/flags-cflags.m4
++++ b/make/autoconf/flags-cflags.m4
+@@ -67,7 +67,11 @@ AC_DEFUN([FLAGS_SETUP_SHARED_LIBS],
+       SHARED_LIBRARY_FLAGS='-shared'
+       SET_EXECUTABLE_ORIGIN='-Wl,-rpath,\$$ORIGIN[$]1'
+       if test "x$OPENJDK_TARGET_OS" = xlinux; then
+-        SET_EXECUTABLE_ORIGIN="$SET_EXECUTABLE_ORIGIN -Wl,--disable-new-dtags"
++        # UMC: the Android linker ignores DT_RPATH entirely and only honours
++        # DT_RUNPATH, so keep the new dtags for Android targets.
++        if ! $CC -dumpmachine 2>/dev/null | $GREP -q android; then
++          SET_EXECUTABLE_ORIGIN="$SET_EXECUTABLE_ORIGIN -Wl,--disable-new-dtags"
++        fi
+       fi
+       SET_SHARED_LIBRARY_NAME='-Wl,-soname=[$]1'
+       SET_SHARED_LIBRARY_MAPFILE='-Wl,-version-script=[$]1'
+diff --git a/make/autoconf/libraries.m4 b/make/autoconf/libraries.m4
+index 51d4f724c..25ed984a9 100644
+--- a/make/autoconf/libraries.m4
++++ b/make/autoconf/libraries.m4
+@@ -41,9 +41,21 @@ m4_include([lib-tests.m4])
+ ################################################################################
+ AC_DEFUN_ONCE([LIB_DETERMINE_DEPENDENCIES],
+ [
++  # UMC: detect an Android target. OpenJDK classifies aarch64-linux-android as
++  # linux (the OS part contains "linux"), but Bionic and the NDK sysroot do not
++  # ship the desktop libraries below, so they must be treated differently.
++  ANDROID_TARGET=false
++  if test "x$OPENJDK_TARGET_OS" = xlinux; then
++    if $CC -dumpmachine 2>/dev/null | $GREP -q android; then
++      ANDROID_TARGET=true
++    fi
++  fi
++  AC_SUBST(ANDROID_TARGET)
++
+   # Check if X11 is needed
+-  if test "x$OPENJDK_TARGET_OS" = xwindows || test "x$OPENJDK_TARGET_OS" = xmacosx; then
+-    # No X11 support on windows or macosx
++  if test "x$OPENJDK_TARGET_OS" = xwindows || test "x$OPENJDK_TARGET_OS" = xmacosx || \
++      test "x$ANDROID_TARGET" = xtrue; then
++    # No X11 support on windows, macosx or android
+     NEEDS_LIB_X11=false
+   else
+     # All other instances need X11, even if building headless only, libawt still
+@@ -52,8 +64,9 @@ AC_DEFUN_ONCE([LIB_DETERMINE_DEPENDENCIES],
+   fi
+ 
+   # Check if fontconfig is needed
+-  if test "x$OPENJDK_TARGET_OS" = xwindows || test "x$OPENJDK_TARGET_OS" = xmacosx; then
+-    # No fontconfig support on windows or macosx
++  if test "x$OPENJDK_TARGET_OS" = xwindows || test "x$OPENJDK_TARGET_OS" = xmacosx || \
++      test "x$ANDROID_TARGET" = xtrue; then
++    # No fontconfig support on windows, macosx or android
+     NEEDS_LIB_FONTCONFIG=false
+   else
+     # All other instances need fontconfig, even if building headless only,
+@@ -62,8 +75,8 @@ AC_DEFUN_ONCE([LIB_DETERMINE_DEPENDENCIES],
+   fi
+ 
+   # Check if cups is needed
+-  if test "x$OPENJDK_TARGET_OS" = xwindows; then
+-    # Windows have a separate print system
++  if test "x$OPENJDK_TARGET_OS" = xwindows || test "x$ANDROID_TARGET" = xtrue; then
++    # Windows has a separate print system; Android has none
+     NEEDS_LIB_CUPS=false
+   else
+     NEEDS_LIB_CUPS=true
+@@ -75,7 +88,7 @@ AC_DEFUN_ONCE([LIB_DETERMINE_DEPENDENCIES],
+   fi
+ 
+   # Check if alsa is needed
+-  if test "x$OPENJDK_TARGET_OS" = xlinux; then
++  if test "x$OPENJDK_TARGET_OS" = xlinux && test "x$ANDROID_TARGET" != xtrue; then
+     NEEDS_LIB_ALSA=true
+   else
+     NEEDS_LIB_ALSA=false
+@@ -144,16 +157,23 @@ AC_DEFUN_ONCE([LIB_SETUP_LIBRARIES],
+   fi
+ 
+   # Threading library
++  # UMC: Bionic folds pthread into libc, so no -lpthread library exists.
++  LIBPTHREAD=""
+   if test "x$OPENJDK_TARGET_OS" = xlinux || test "x$OPENJDK_TARGET_OS" = xaix; then
+-    BASIC_JVM_LIBS="$BASIC_JVM_LIBS -lpthread"
++    if test "x$ANDROID_TARGET" != xtrue; then
++      LIBPTHREAD="-lpthread"
++    fi
+   fi
++  BASIC_JVM_LIBS="$BASIC_JVM_LIBS $LIBPTHREAD"
++  AC_SUBST(LIBPTHREAD)
+ 
+   # librt for legacy clock_gettime
+-  if test "x$OPENJDK_TARGET_OS" = xlinux; then
++  if test "x$OPENJDK_TARGET_OS" = xlinux && test "x$ANDROID_TARGET" != xtrue; then
+     # Hotspot needs to link librt to get the clock_* functions.
+     # But once our supported minimum build and runtime platform
+     # has glibc 2.17, this can be removed as the functions are
+     # in libc.
++    # UMC: Bionic has clock_* in libc as well.
+     BASIC_JVM_LIBS="$BASIC_JVM_LIBS -lrt"
+   fi
+ 
+diff --git a/make/autoconf/spec.gmk.in b/make/autoconf/spec.gmk.in
+index a7d39d2c9..5238f91e0 100644
+--- a/make/autoconf/spec.gmk.in
++++ b/make/autoconf/spec.gmk.in
+@@ -145,6 +145,10 @@ endif
+ LIBM:=@LIBM@
+ LIBDL:=@LIBDL@
+ 
++# UMC: Android target flag and pthread library name (empty on bionic).
++ANDROID_TARGET := @ANDROID_TARGET@
++LIBPTHREAD := @LIBPTHREAD@
++
+ WINENV_ROOT := @WINENV_ROOT@
+ WINENV_PREFIX := @WINENV_PREFIX@
+ 
+diff --git a/make/common/modules/LauncherCommon.gmk b/make/common/modules/LauncherCommon.gmk
+index 21d2b9a93..12e66a823 100644
+--- a/make/common/modules/LauncherCommon.gmk
++++ b/make/common/modules/LauncherCommon.gmk
+@@ -174,7 +174,7 @@ define SetupBuildLauncherBody
+           -L$(call FindLibDirForModule, java.base), \
+       LDFLAGS_aix := -L$(SUPPORT_OUTPUTDIR)/native/java.base, \
+       LIBS := $(JDKEXE_LIBS) $$($1_LIBS), \
+-      LIBS_linux := -ljli -lpthread $(LIBDL), \
++      LIBS_linux := -ljli $(LIBPTHREAD) $(LIBDL), \
+       LIBS_macosx := -ljli -framework Cocoa -framework Security \
+           -framework ApplicationServices, \
+       LIBS_aix := -ljli_static, \
+diff --git a/make/modules/java.base/Lib.gmk b/make/modules/java.base/Lib.gmk
+index 1e0f66726..d71ba8391 100644
+--- a/make/modules/java.base/Lib.gmk
++++ b/make/modules/java.base/Lib.gmk
+@@ -80,7 +80,7 @@ $(eval $(call SetupJdkLibrary, BUILD_LIBNIO, \
+     LDFLAGS := $(LDFLAGS_JDKLIB) \
+         $(call SET_SHARED_LIBRARY_ORIGIN), \
+     LIBS_unix := -ljava -lnet, \
+-    LIBS_linux := -lpthread $(LIBDL), \
++    LIBS_linux := $(LIBPTHREAD) $(LIBDL), \
+     LIBS_aix := $(LIBDL), \
+     LIBS_macosx := \
+         -framework CoreFoundation -framework CoreServices, \
+diff --git a/make/modules/java.base/lib/CoreLibraries.gmk b/make/modules/java.base/lib/CoreLibraries.gmk
+index 6aa9fd658..4d7b29d32 100644
+--- a/make/modules/java.base/lib/CoreLibraries.gmk
++++ b/make/modules/java.base/lib/CoreLibraries.gmk
+@@ -177,7 +177,7 @@ $(eval $(call SetupJdkLibrary, BUILD_LIBJLI, \
+     LDFLAGS := $(LDFLAGS_JDKLIB) \
+         $(call SET_SHARED_LIBRARY_ORIGIN), \
+     LIBS_unix := $(LIBZ_LIBS), \
+-    LIBS_linux := $(LIBDL) -lpthread, \
++    LIBS_linux := $(LIBDL) $(LIBPTHREAD), \
+     LIBS_aix := $(LIBDL),\
+     LIBS_macosx := -framework Cocoa -framework Security -framework ApplicationServices, \
+     LIBS_windows := advapi32.lib comctl32.lib user32.lib, \
+diff --git a/make/modules/java.desktop/Lib.gmk b/make/modules/java.desktop/Lib.gmk
+index be1ac3f1f..7c5a6f240 100644
+--- a/make/modules/java.desktop/Lib.gmk
++++ b/make/modules/java.desktop/Lib.gmk
+@@ -42,14 +42,29 @@ include lib/Awt2dLibraries.gmk
+ 
+ ifeq ($(call isTargetOs, aix), false)
+ 
+-  LIBJSOUND_CFLAGS := \
+-      $(ALSA_CFLAGS) \
+-      -DX_PLATFORM=X_$(OPENJDK_TARGET_OS_UPPERCASE) \
+-      -DUSE_PORTS=TRUE \
+-      -DUSE_DAUDIO=TRUE \
+-      -DUSE_PLATFORM_MIDI_OUT=TRUE \
+-      -DUSE_PLATFORM_MIDI_IN=TRUE \
+-      #
++  ifeq ($(ANDROID_TARGET), true)
++    # UMC: output-only AAudio backend. Ports and MIDI are compiled out.
++    LIBJSOUND_CFLAGS := \
++        -DX_PLATFORM=X_LINUX \
++        -DUSE_PORTS=FALSE \
++        -DUSE_DAUDIO=TRUE \
++        -DUSE_PLATFORM_MIDI_OUT=FALSE \
++        -DUSE_PLATFORM_MIDI_IN=FALSE \
++        #
++    LIBJSOUND_EXTRA_SRC := $(TOPDIR)/src/java.desktop/android/native/libjsound
++    LIBJSOUND_EXCLUDE_FILES := $(notdir $(wildcard \
++        $(TOPDIR)/src/java.desktop/linux/native/libjsound/PLATFORM_API_LinuxOS_ALSA_*.c))
++    LIBJSOUND_EXTRA_LIBS := -laaudio
++  else
++    LIBJSOUND_CFLAGS := \
++        $(ALSA_CFLAGS) \
++        -DX_PLATFORM=X_$(OPENJDK_TARGET_OS_UPPERCASE) \
++        -DUSE_PORTS=TRUE \
++        -DUSE_DAUDIO=TRUE \
++        -DUSE_PLATFORM_MIDI_OUT=TRUE \
++        -DUSE_PLATFORM_MIDI_IN=TRUE \
++        #
++  endif
+ 
+   ifeq ($(call isTargetOs, macosx), true)
+     LIBJSOUND_TOOLCHAIN := TOOLCHAIN_LINK_CXX
+@@ -59,6 +74,8 @@ ifeq ($(call isTargetOs, aix), false)
+       NAME := jsound, \
+       TOOLCHAIN := $(LIBJSOUND_TOOLCHAIN), \
+       OPTIMIZATION := LOW, \
++      EXCLUDE_FILES := $(LIBJSOUND_EXCLUDE_FILES), \
++      EXTRA_SRC := $(LIBJSOUND_EXTRA_SRC), \
+       CFLAGS := $(CFLAGS_JDKLIB) \
+           $(LIBJSOUND_CFLAGS), \
+       CXXFLAGS := $(CXXFLAGS_JDKLIB) $(LIBJSOUND_CFLAGS), \
+@@ -66,7 +83,7 @@ ifeq ($(call isTargetOs, aix), false)
+       DISABLED_WARNINGS_clang := undef, \
+       LDFLAGS := $(LDFLAGS_JDKLIB) \
+           $(call SET_SHARED_LIBRARY_ORIGIN), \
+-      LIBS_unix := -ljava -ljvm, \
++      LIBS_unix := -ljava -ljvm $(LIBJSOUND_EXTRA_LIBS), \
+       LIBS_linux := $(ALSA_LIBS), \
+       LIBS_macosx := -framework CoreAudio -framework CoreFoundation \
+           -framework CoreServices -framework AudioUnit \
+diff --git a/make/modules/java.desktop/lib/Awt2dLibraries.gmk b/make/modules/java.desktop/lib/Awt2dLibraries.gmk
+index f7dec7433..993141f54 100644
+--- a/make/modules/java.desktop/lib/Awt2dLibraries.gmk
++++ b/make/modules/java.desktop/lib/Awt2dLibraries.gmk
+@@ -381,6 +381,11 @@ ifeq ($(call isTargetOs, windows macosx), false)
+ 
+   LIBAWT_HEADLESS_EXCLUDES := medialib
+ 
++  # UMC: Android has no CUPS printing stack.
++  ifeq ($(ANDROID_TARGET), true)
++    LIBAWT_HEADLESS_EXFILES := CUPSfuncs.c
++  endif
++
+   LIBAWT_HEADLESS_EXTRA_HEADER_DIRS := \
+       $(LIBAWT_DEFAULT_HEADER_DIRS) \
+       common/awt/debug \
+@@ -395,6 +400,7 @@ ifeq ($(call isTargetOs, windows macosx), false)
+       NAME := awt_headless, \
+       EXTRA_SRC := $(LIBAWT_HEADLESS_EXTRA_SRC), \
+       EXCLUDES := $(LIBAWT_HEADLESS_EXCLUDES), \
++      EXCLUDE_FILES := $(LIBAWT_HEADLESS_EXFILES), \
+       OPTIMIZATION := LOW, \
+       CFLAGS := $(CFLAGS_JDKLIB) \
+           $(LIBAWT_HEADLESS_CFLAGS), \
+@@ -545,6 +551,13 @@ LIBFONTMANAGER_CFLAGS += $(X_CFLAGS) -DLE_STANDALONE -DHEADLESS
+ #   Filter relevant linker flags disallowing unresolved symbols as we cannot
+ #   build-time decide to which library to link against (libawt_headless or
+ #   libawt_xawt). See JDK-8196516 for details.
++# UMC: on Android the linker resolves symbols only through DT_NEEDED entries.
++# AWTFreeFont lives in libawt_headless.so for headless builds, so depend on it
++# explicitly instead of relying on global symbol visibility (glibc behaviour).
++ifeq ($(ANDROID_TARGET), true)
++  LIBFONTMANAGER_EXTRA_LIBS := -lawt_headless
++endif
++
+ $(eval $(call SetupJdkLibrary, BUILD_LIBFONTMANAGER, \
+     NAME := fontmanager, \
+     EXCLUDE_FILES := $(LIBFONTMANAGER_EXCLUDE_FILES) \
+@@ -567,7 +580,7 @@ $(eval $(call SetupJdkLibrary, BUILD_LIBFONTMANAGER, \
+     LDFLAGS_unix := -L$(INSTALL_LIBRARIES_HERE), \
+     LDFLAGS_aix := -Wl$(COMMA)-berok, \
+     LIBS := $(BUILD_LIBFONTMANAGER_FONTLIB), \
+-    LIBS_unix := -lawt -ljava -ljvm $(LIBM) $(LIBCXX), \
++    LIBS_unix := -lawt $(LIBFONTMANAGER_EXTRA_LIBS) -ljava -ljvm $(LIBM) $(LIBCXX), \
+     LIBS_macosx := -lawt_lwawt -framework CoreText -framework CoreFoundation -framework CoreGraphics, \
+     LIBS_windows := $(WIN_JAVA_LIB) advapi32.lib user32.lib gdi32.lib \
+         $(WIN_AWT_LIB), \
+diff --git a/make/modules/jdk.hotspot.agent/Lib.gmk b/make/modules/jdk.hotspot.agent/Lib.gmk
+index d21c969c1..9687b801b 100644
+--- a/make/modules/jdk.hotspot.agent/Lib.gmk
++++ b/make/modules/jdk.hotspot.agent/Lib.gmk
+@@ -55,6 +55,11 @@ endif
+ 
+ ################################################################################
+ 
++# UMC: The Serviceability Agent native library uses glibc procfs interfaces
++# that bionic does not provide. Keep the Java module (module graph needs it)
++# but do not build the native library on Android.
++ifneq ($(ANDROID_TARGET), true)
++
+ $(eval $(call SetupJdkLibrary, BUILD_LIBSA, \
+     NAME := saproc, \
+     TOOLCHAIN := $(SA_TOOLCHAIN), \
+@@ -79,4 +84,6 @@ $(eval $(call SetupJdkLibrary, BUILD_LIBSA, \
+ 
+ TARGETS += $(BUILD_LIBSA)
+ 
++endif # ANDROID_TARGET
++
+ ################################################################################
+diff --git a/make/modules/jdk.jdwp.agent/Lib.gmk b/make/modules/jdk.jdwp.agent/Lib.gmk
+index 52ac6564d..be72cd66f 100644
+--- a/make/modules/jdk.jdwp.agent/Lib.gmk
++++ b/make/modules/jdk.jdwp.agent/Lib.gmk
+@@ -37,7 +37,7 @@ $(eval $(call SetupJdkLibrary, BUILD_LIBDT_SOCKET, \
+         libjdwp/export, \
+     LDFLAGS := $(LDFLAGS_JDKLIB) \
+         $(call SET_SHARED_LIBRARY_ORIGIN), \
+-    LIBS_linux := -lpthread, \
++    LIBS_linux := $(LIBPTHREAD), \
+     LIBS_windows := $(JDKLIB_LIBS) ws2_32.lib iphlpapi.lib, \
+ ))
+ 
+diff --git a/make/modules/jdk.sctp/Lib.gmk b/make/modules/jdk.sctp/Lib.gmk
+index afce891ee..f2cf9a79c 100644
+--- a/make/modules/jdk.sctp/Lib.gmk
++++ b/make/modules/jdk.sctp/Lib.gmk
+@@ -41,7 +41,7 @@ ifeq ($(call isTargetOsType, unix), true)
+         LDFLAGS := $(LDFLAGS_JDKLIB) \
+             $(call SET_SHARED_LIBRARY_ORIGIN), \
+         LIBS_unix := -lnio -lnet -ljava -ljvm, \
+-        LIBS_linux := -lpthread $(LIBDL), \
++        LIBS_linux := $(LIBPTHREAD) $(LIBDL), \
+     ))
+ 
+     TARGETS += $(BUILD_LIBSCTP)
+diff --git a/src/hotspot/os/linux/os_linux.cpp b/src/hotspot/os/linux/os_linux.cpp
+index dfdfe2cc5..1f8ddd963 100644
+--- a/src/hotspot/os/linux/os_linux.cpp
++++ b/src/hotspot/os/linux/os_linux.cpp
+@@ -546,7 +546,23 @@ void os::init_system_properties_values() {
+         *pslash = '\0';        // Get rid of /lib.
+       }
+     }
++#ifdef __ANDROID__
++    // UMC: libjvm.so is loaded from the APK's native library directory, so the
++    // path-derived java.home never points at a JRE. Embedders pass the real
++    // java.home through the UMC_JAVA_HOME environment variable.
++    const char* umc_java_home = ::getenv("UMC_JAVA_HOME");
++    if (umc_java_home != nullptr && umc_java_home[0] != '\0') {
++      Arguments::set_java_home(umc_java_home);
++      // dll_dir is used to locate libjimage.so; normally <java.home>/lib.
++      char umc_dll_dir[JVM_MAXPATHLEN];
++      jio_snprintf(umc_dll_dir, sizeof(umc_dll_dir), "%s/lib", umc_java_home);
++      Arguments::set_dll_dir(umc_dll_dir);
++    } else {
++      Arguments::set_java_home(buf);
++    }
++#else
+     Arguments::set_java_home(buf);
++#endif
+     if (!set_boot_path('/', ':')) {
+       vm_exit_during_initialization("Failed setting boot class path.", nullptr);
+     }
+@@ -593,12 +609,18 @@ void os::init_system_properties_values() {
+ 
+ void os::Linux::libpthread_init() {
+   // Save glibc and pthread version strings.
+-#if !defined(_CS_GNU_LIBC_VERSION) || \
+-    !defined(_CS_GNU_LIBPTHREAD_VERSION)
+-  #error "glibc too old (< 2.3.2)"
++#if !defined(__ANDROID__)
++  #if !defined(_CS_GNU_LIBC_VERSION) || \
++      !defined(_CS_GNU_LIBPTHREAD_VERSION)
++    #error "glibc too old (< 2.3.2)"
++  #endif
+ #endif
+ 
+-#ifdef MUSL_LIBC
++#ifdef __ANDROID__
++  // UMC: Bionic has no confstr(_CS_GNU_LIBC_VERSION) equivalents.
++  os::Linux::set_libc_version("bionic - unknown");
++  os::Linux::set_libpthread_version("bionic - unknown");
++#elif defined(MUSL_LIBC)
+   // confstr() from musl libc returns EINVAL for
+   // _CS_GNU_LIBC_VERSION and _CS_GNU_LIBPTHREAD_VERSION
+   os::Linux::set_libc_version("musl - unknown");
+@@ -1902,15 +1924,25 @@ void * os::Linux::dll_load_in_vmthread(const char *filename, char *ebuf,
+ }
+ 
+ const char* os::Linux::dll_path(void* lib) {
++  assert(lib != nullptr, "dll_path parameter must not be null");
++#ifdef __ANDROID__
++  // UMC: Bionic does not implement dlinfo(RTLD_DI_LINKMAP). dladdr() gives us
++  // the same library file name for a given address.
++  Dl_info info;
++  if (::dladdr(lib, &info) != 0) {
++    return info.dli_fname;
++  }
++  return nullptr;
++#else
+   struct link_map *lmap;
+   const char* l_path = nullptr;
+-  assert(lib != nullptr, "dll_path parameter must not be null");
+ 
+   int res_dli = ::dlinfo(lib, RTLD_DI_LINKMAP, &lmap);
+   if (res_dli == 0) {
+     l_path = lmap->l_name;
+   }
+   return l_path;
++#endif
+ }
+ 
+ static unsigned count_newlines(const char* s) {
+@@ -5454,7 +5486,21 @@ bool os::is_thread_cpu_time_supported() {
+ // Linux doesn't yet have a (official) notion of processor sets,
+ // so just return the system wide load average.
+ int os::loadavg(double loadavg[], int nelem) {
++#ifdef __ANDROID__
++  // UMC: getloadavg() is only available from API 29; Bionic exposes sysinfo()
++  // on every level, so derive the three load averages from it.
++  struct sysinfo si;
++  if (::sysinfo(&si) != 0) {
++    return -1;
++  }
++  int n = nelem < 3 ? nelem : 3;
++  for (int i = 0; i < n; i++) {
++    loadavg[i] = (double) si.loads[i] / 65536.0;
++  }
++  return n;
++#else
+   return ::getloadavg(loadavg, nelem);
++#endif
+ }
+ 
+ // Get the default path to the core file
+diff --git a/src/hotspot/os/posix/os_posix.cpp b/src/hotspot/os/posix/os_posix.cpp
+index 7d1397120..208de8d8a 100644
+--- a/src/hotspot/os/posix/os_posix.cpp
++++ b/src/hotspot/os/posix/os_posix.cpp
+@@ -1956,7 +1956,22 @@ int os::fork_and_exec(const char* cmd) {
+   // Note: cast is needed because posix_spawn() requires - for compatibility with ancient
+   // C-code - a non-const argv/envp pointer array. But it is fine to hand in literal
+   // strings and just cast the constness away. See also ProcessImpl_md.c.
++#ifdef __ANDROID__
++  // UMC: Bionic only provides posix_spawn() from API 28. Use fork/exec instead;
++  // only async-signal-safe calls are made between fork() and execve().
++  pid_t child = ::fork();
++  if (child == 0) {
++    ::execve("/system/bin/sh", (char* const*) argv, env);
++    ::_exit(127);
++  }
++  if (child < 0) {
++    return -1;
++  }
++  pid = child;
++  int rc = 0;
++#else
+   int rc = ::posix_spawn(&pid, "/bin/sh", nullptr, nullptr, (char**) argv, env);
++#endif
+   if (rc == 0) {
+     int status;
+     // Wait for the child process to exit.  This returns immediately if
+diff --git a/src/hotspot/share/prims/jni.cpp b/src/hotspot/share/prims/jni.cpp
+index 86fb64429..ff94358ab 100644
+--- a/src/hotspot/share/prims/jni.cpp
++++ b/src/hotspot/share/prims/jni.cpp
+@@ -3664,7 +3664,24 @@ static jint JNI_CreateJavaVM_inner(JavaVM **vm, void **penv, void *args) {
+ 
+ }
+ 
++#ifdef __ANDROID__
++#include <malloc.h>
++#ifndef M_BIONIC_SET_HEAP_TAGGING_LEVEL
++// These constants are exposed by bionic from API 31, but the option itself
++// has existed since API 26.
++#define M_BIONIC_SET_HEAP_TAGGING_LEVEL (-204)
++#define M_HEAP_TAGGING_LEVEL_NONE 0
++#endif
++#endif
++
+ _JNI_IMPORT_OR_EXPORT_ jint JNICALL JNI_CreateJavaVM(JavaVM **vm, void **penv, void *args) {
++#ifdef __ANDROID__
++  // UMC: disable bionic heap pointer tagging for this process. HotSpot keeps
++  // heap pointers in places where the top-byte tag is lost, which makes scudo
++  // abort with "Pointer tag ... was truncated" (seen in
++  // InlineCacheBuffer::update_inline_caches).
++  mallopt(M_BIONIC_SET_HEAP_TAGGING_LEVEL, M_HEAP_TAGGING_LEVEL_NONE);
++#endif
+   jint result = JNI_ERR;
+   // On Windows, let CreateJavaVM run with SEH protection
+ #if defined(_WIN32) && !defined(USE_VECTORED_EXCEPTION_HANDLING)
+diff --git a/src/hotspot/share/utilities/elfFile.hpp b/src/hotspot/share/utilities/elfFile.hpp
+index 579837ebf..ecf26744f 100644
+--- a/src/hotspot/share/utilities/elfFile.hpp
++++ b/src/hotspot/share/utilities/elfFile.hpp
+@@ -47,8 +47,13 @@ typedef Elf64_Phdr      Elf_Phdr;
+ typedef Elf64_Sym       Elf_Sym;
+ 
+ #if !defined(_ALLBSD_SOURCE) || defined(__APPLE__)
++// UMC: Bionic's <linux/elf.h> already defines ELF_ST_TYPE as a function-like
++// macro (and has no ELF64_ST_TYPE in <elf.h>). Redefining it here turns
++// ELF_ST_TYPE(x) into an object-like expansion and breaks compilation.
++#ifndef ELF_ST_TYPE
+ #define ELF_ST_TYPE ELF64_ST_TYPE
+ #endif
++#endif
+ 
+ #else
+ 
+@@ -63,9 +68,12 @@ typedef Elf32_Phdr      Elf_Phdr;
+ typedef Elf32_Sym       Elf_Sym;
+ 
+ #if !defined(_ALLBSD_SOURCE) || defined(__APPLE__)
++// UMC: see the _LP64 branch above.
++#ifndef ELF_ST_TYPE
+ #define ELF_ST_TYPE ELF32_ST_TYPE
+ #endif
+ #endif
++#endif
+ 
+ #include "jvm_md.h"
+ #include "globalDefinitions.hpp"
+diff --git a/src/java.base/unix/native/libjava/ProcessImpl_md.c b/src/java.base/unix/native/libjava/ProcessImpl_md.c
+index 546107ab2..6139f8baa 100644
+--- a/src/java.base/unix/native/libjava/ProcessImpl_md.c
++++ b/src/java.base/unix/native/libjava/ProcessImpl_md.c
+@@ -36,7 +36,10 @@
+  * Platform-specific support for java.lang.Process
+  */
+ #include <assert.h>
++#include <errno.h>
++#include <fcntl.h>
+ #include <stddef.h>
++#include <stdio.h>
+ #include <stdlib.h>
+ #include <sys/types.h>
+ #include <ctype.h>
+@@ -45,6 +48,7 @@
+ #include <string.h>
+ 
+ #include <spawn.h>
++#include <unistd.h>
+ 
+ #include "childproc.h"
+ 
+@@ -583,7 +587,46 @@ spawnChild(JNIEnv *env, jobject process, ChildStuff *c, const char *helperpath)
+         }
+     }
+ 
++#if defined(__ANDROID__)
++    /* UMC: Bionic only provides posix_spawn() from API 28; use fork/exec.
++     * The JRE lives in app-private storage where execve is forbidden, so the
++     * embedder ships jspawnhelper as a native library inside the APK and
++     * exports its path in UMC_JSPAWNHELPER. */
++    const char* umc_helper = getenv("UMC_JSPAWNHELPER");
++    const char* exec_path = (umc_helper != NULL && umc_helper[0] != '\0') ? umc_helper : helperpath;
++    pid_t child = fork();
++    if (child == 0) {
++        execve(exec_path, (char * const *) hlpargs, environ);
++        {
++            char umc_msg[512];
++            int n = snprintf(umc_msg, sizeof(umc_msg),
++                             "[umc] execve(%s) failed: errno=%d (%s)\n",
++                             exec_path, errno, strerror(errno));
++            if (n > 0) {
++                const char *umc_log = getenv("UMC_EXEC_LOG");
++                if (umc_log != NULL && umc_log[0] != '\0') {
++                    int fd = open(umc_log, O_WRONLY | O_CREAT | O_APPEND, 0600);
++                    if (fd >= 0) {
++                        ssize_t ignored = write(fd, umc_msg, (size_t) n);
++                        (void) ignored;
++                        close(fd);
++                    }
++                } else {
++                    ssize_t ignored = write(2, umc_msg, (size_t) n);
++                    (void) ignored;
++                }
++            }
++        }
++        _exit(127);
++    }
++    if (child < 0) {
++        return -1;
++    }
++    resultPid = child;
++    rval = 0;
++#else
+     rval = posix_spawn(&resultPid, helperpath, 0, 0, (char * const *) hlpargs, environ);
++#endif
+ 
+     if (rval != 0) {
+         return -1;
+diff --git a/src/java.base/unix/native/libjava/jni_util_md.c b/src/java.base/unix/native/libjava/jni_util_md.c
+index 32b477aa7..3837d560b 100644
+--- a/src/java.base/unix/native/libjava/jni_util_md.c
++++ b/src/java.base/unix/native/libjava/jni_util_md.c
+@@ -31,7 +31,14 @@
+ #include "jni_util.h"
+ #include "dlfcn.h"
+ 
+-#if defined(LINUX) && (defined(_GNU_SOURCE) || \
++#if defined(__ANDROID__)
++/* UMC: glibc's __xpg_strerror_r does not exist in bionic. Bionic exports the
++   POSIX variant as strerror_r and the GNU variant as __gnu_strerror_r; the
++   headers alias strerror_r to the GNU variant when _GNU_SOURCE is defined, so
++   bind explicitly to the POSIX entry point. */
++extern int __posix_strerror_r(int, char *, size_t) __asm__("strerror_r");
++#define strerror_r(a, b, c) __posix_strerror_r((a), (b), (c))
++#elif defined(LINUX) && (defined(_GNU_SOURCE) || \
+          (defined(_POSIX_C_SOURCE) && _POSIX_C_SOURCE < 200112L \
+              && defined(_XOPEN_SOURCE) && _XOPEN_SOURCE < 600))
+ extern int __xpg_strerror_r(int, char *, size_t);
+diff --git a/src/java.base/unix/native/libnet/net_util_md.h b/src/java.base/unix/native/libnet/net_util_md.h
+index 902cf9673..5e58ef1e9 100644
+--- a/src/java.base/unix/native/libnet/net_util_md.h
++++ b/src/java.base/unix/native/libnet/net_util_md.h
+@@ -27,6 +27,7 @@
+ #define NET_UTILS_MD_H
+ 
+ #include <netdb.h>
++#include <netinet/in.h>
+ #include <poll.h>
+ #include <sys/socket.h>
+ 
+diff --git a/src/java.desktop/android/native/libjsound/PLATFORM_API_AndroidOS_AAudio_PCM.c b/src/java.desktop/android/native/libjsound/PLATFORM_API_AndroidOS_AAudio_PCM.c
+new file mode 100644
+index 000000000..142e9932b
+--- /dev/null
++++ b/src/java.desktop/android/native/libjsound/PLATFORM_API_AndroidOS_AAudio_PCM.c
+@@ -0,0 +1,244 @@
++/*
++ * UMC: javax.sound DirectAudio backend for Android using AAudio.
++ *
++ * Output-only implementation: one mixer, one playback device (16-bit PCM,
++ * mono/stereo, 44.1/48 kHz). Capture, ports and MIDI are disabled at build
++ * time (USE_PORTS=FALSE, USE_PLATFORM_MIDI_*=FALSE).
++ */
++#include "DirectAudio.h"
++#include "SoundDefs.h"
++#include "Utilities.h"
++
++#include <aaudio/AAudio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <stdio.h>
++
++#define AAUDIO_TIMEOUT_NS (1000LL * 1000LL * 1000LL) /* 1s */
++
++typedef struct {
++    AAudioStream *stream;
++    int isSource;
++    int frameSize;
++    int bufferSizeBytes;
++    INT64 writtenBytes;
++    int started;
++} AndroidAudioHandle;
++
++static void set_string(char *dst, size_t len, const char *src) {
++    if (len == 0) {
++        return;
++    }
++    strncpy(dst, src, len - 1);
++    dst[len - 1] = '\0';
++}
++
++INT32 DAUDIO_GetDirectAudioDeviceCount(void) {
++    return 1;
++}
++
++INT32 DAUDIO_GetDirectAudioDeviceDescription(INT32 mixerIndex,
++                                             DirectAudioDeviceDescription *description) {
++    if (mixerIndex != 0 || description == NULL) {
++        return FALSE;
++    }
++    description->deviceID = 0;
++    description->maxSimulLines = 8;
++    set_string(description->name, sizeof(description->name), "Android AAudio");
++    set_string(description->vendor, sizeof(description->vendor), "UMC");
++    set_string(description->description, sizeof(description->description),
++               "Android AAudio playback");
++    set_string(description->version, sizeof(description->version), "1.0");
++    return TRUE;
++}
++
++void DAUDIO_GetFormats(INT32 mixerIndex, INT32 deviceID, int isSource, void *creator) {
++    if (mixerIndex != 0 || deviceID != 0 || !isSource) {
++        return;
++    }
++    /* 16-bit signed little-endian PCM */
++    DAUDIO_AddAudioFormat(creator, 16, 4, 2, 44100.0f, DAUDIO_PCM, TRUE, FALSE);
++    DAUDIO_AddAudioFormat(creator, 16, 4, 2, 48000.0f, DAUDIO_PCM, TRUE, FALSE);
++    DAUDIO_AddAudioFormat(creator, 16, 2, 1, 44100.0f, DAUDIO_PCM, TRUE, FALSE);
++    DAUDIO_AddAudioFormat(creator, 16, 2, 1, 48000.0f, DAUDIO_PCM, TRUE, FALSE);
++}
++
++void *DAUDIO_Open(INT32 mixerIndex, INT32 deviceID, int isSource,
++                  int encoding, float sampleRate, int sampleSizeInBits,
++                  int frameSize, int channels,
++                  int isSigned, int isBigEndian, int bufferSizeInBytes) {
++    if (mixerIndex != 0 || deviceID != 0 || !isSource) {
++        return NULL;
++    }
++    if (encoding != DAUDIO_PCM || !isSigned || isBigEndian ||
++        sampleSizeInBits != 16 || channels <= 0 || frameSize <= 0) {
++        return NULL;
++    }
++
++    AAudioStreamBuilder *builder = NULL;
++    if (AAudio_createStreamBuilder(&builder) != AAUDIO_OK || builder == NULL) {
++        return NULL;
++    }
++    AAudioStreamBuilder_setDirection(builder, AAUDIO_DIRECTION_OUTPUT);
++    AAudioStreamBuilder_setFormat(builder, AAUDIO_FORMAT_PCM_I16);
++    AAudioStreamBuilder_setSampleRate(builder, (int32_t) sampleRate);
++    AAudioStreamBuilder_setChannelCount(builder, channels);
++    AAudioStreamBuilder_setPerformanceMode(builder, AAUDIO_PERFORMANCE_MODE_NONE);
++    AAudioStreamBuilder_setSharingMode(builder, AAUDIO_SHARING_MODE_SHARED);
++    if (bufferSizeInBytes > 0) {
++        int32_t frames = bufferSizeInBytes / frameSize;
++        if (frames > 0) {
++            AAudioStreamBuilder_setBufferCapacityInFrames(builder, frames);
++        }
++    }
++
++    AAudioStream *stream = NULL;
++    aaudio_result_t res = AAudioStreamBuilder_openStream(builder, &stream);
++    AAudioStreamBuilder_delete(builder);
++    if (res != AAUDIO_OK || stream == NULL) {
++        return NULL;
++    }
++
++    AndroidAudioHandle *h = (AndroidAudioHandle *) calloc(1, sizeof(AndroidAudioHandle));
++    if (h == NULL) {
++        AAudioStream_close(stream);
++        return NULL;
++    }
++    h->stream = stream;
++    h->isSource = isSource;
++    h->frameSize = frameSize;
++
++    int32_t bufFrames = AAudioStream_getBufferSizeInFrames(stream);
++    if (bufFrames <= 0) {
++        bufFrames = (int32_t) (sampleRate / 10.0f); /* ~100 ms fallback */
++    }
++    h->bufferSizeBytes = (int) bufFrames * frameSize;
++
++    return h;
++}
++
++int DAUDIO_Start(void *id, int isSource) {
++    AndroidAudioHandle *h = (AndroidAudioHandle *) id;
++    if (h == NULL || !h->isSource) {
++        return FALSE;
++    }
++    aaudio_result_t res = AAudioStream_requestStart(h->stream);
++    if (res != AAUDIO_OK) {
++        return FALSE;
++    }
++    h->started = 1;
++    return TRUE;
++}
++
++int DAUDIO_Stop(void *id, int isSource) {
++    AndroidAudioHandle *h = (AndroidAudioHandle *) id;
++    if (h == NULL || !h->isSource) {
++        return FALSE;
++    }
++    AAudioStream_requestStop(h->stream);
++    aaudio_stream_state_t state = AAudioStream_getState(h->stream);
++    while (state != AAUDIO_STREAM_STATE_STOPPED && state != AAUDIO_STREAM_STATE_CLOSED) {
++        aaudio_stream_state_t next = AAUDIO_STREAM_STATE_UNINITIALIZED;
++        if (AAudioStream_waitForStateChange(h->stream, state, &next, AAUDIO_TIMEOUT_NS) != AAUDIO_OK) {
++            break;
++        }
++        state = next;
++    }
++    h->started = 0;
++    return TRUE;
++}
++
++void DAUDIO_Close(void *id, int isSource) {
++    AndroidAudioHandle *h = (AndroidAudioHandle *) id;
++    if (h == NULL) {
++        return;
++    }
++    if (h->started) {
++        DAUDIO_Stop(id, isSource);
++    }
++    AAudioStream_close(h->stream);
++    free(h);
++}
++
++int DAUDIO_Write(void *id, char *data, int byteSize) {
++    AndroidAudioHandle *h = (AndroidAudioHandle *) id;
++    if (h == NULL || !h->isSource || data == NULL || byteSize <= 0) {
++        return -1;
++    }
++    int totalFrames = byteSize / h->frameSize;
++    int done = 0;
++    while (done < totalFrames) {
++        int32_t written = AAudioStream_write(h->stream, data + (size_t) done * h->frameSize,
++                                             totalFrames - done, AAUDIO_TIMEOUT_NS);
++        if (written < 0) {
++            return -1;
++        }
++        if (written == 0) {
++            continue;
++        }
++        done += written;
++    }
++    h->writtenBytes += (INT64) totalFrames * h->frameSize;
++    return byteSize;
++}
++
++int DAUDIO_Read(void *id, char *data, int byteSize) {
++    (void) id;
++    (void) data;
++    (void) byteSize;
++    return -1;
++}
++
++int DAUDIO_GetBufferSize(void *id, int isSource) {
++    AndroidAudioHandle *h = (AndroidAudioHandle *) id;
++    if (h == NULL || !h->isSource) {
++        return 0;
++    }
++    return h->bufferSizeBytes;
++}
++
++int DAUDIO_StillDraining(void *id, int isSource) {
++    (void) id;
++    (void) isSource;
++    return FALSE;
++}
++
++int DAUDIO_Flush(void *id, int isSource) {
++    (void) id;
++    (void) isSource;
++    return TRUE;
++}
++
++int DAUDIO_GetAvailable(void *id, int isSource) {
++    AndroidAudioHandle *h = (AndroidAudioHandle *) id;
++    if (h == NULL || !h->isSource) {
++        return 0;
++    }
++    return h->bufferSizeBytes;
++}
++
++INT64 DAUDIO_GetBytePosition(void *id, int isSource, INT64 javaBytePos) {
++    AndroidAudioHandle *h = (AndroidAudioHandle *) id;
++    if (h == NULL) {
++        return javaBytePos;
++    }
++    return javaBytePos + h->writtenBytes;
++}
++
++void DAUDIO_SetBytePosition(void *id, int isSource, INT64 javaBytePos) {
++    AndroidAudioHandle *h = (AndroidAudioHandle *) id;
++    if (h != NULL) {
++        h->writtenBytes = javaBytePos;
++    }
++}
++
++int DAUDIO_RequiresServicing(void *id, int isSource) {
++    (void) id;
++    (void) isSource;
++    return FALSE;
++}
++
++void DAUDIO_Service(void *id, int isSource) {
++    (void) id;
++    (void) isSource;
++}
+diff --git a/src/java.instrument/unix/native/libinstrument/EncodingSupport_md.c b/src/java.instrument/unix/native/libinstrument/EncodingSupport_md.c
+index 490eea9a5..51f9d5f09 100644
+--- a/src/java.instrument/unix/native/libinstrument/EncodingSupport_md.c
++++ b/src/java.instrument/unix/native/libinstrument/EncodingSupport_md.c
+@@ -60,7 +60,11 @@ utfInitialize(void)
+ {
+     const char* codeset;
+ 
+-#ifndef MACOSX
++#if defined(__ANDROID__)
++    /* UMC: Android's platform encoding is UTF-8 and bionic only provides
++       iconv from API 28, so always take the UTF-8 fast path. */
++    codeset = "UTF-8";
++#elif !defined(MACOSX)
+     /* Set the locale from the environment */
+     (void)setlocale(LC_ALL, "");
+ 
+@@ -83,6 +87,7 @@ utfInitialize(void)
+         return;
+     }
+ 
++#if !defined(__ANDROID__)
+     /* Open conversion descriptors */
+     iconvToPlatform   = iconv_open(codeset, "UTF-8");
+     if ( iconvToPlatform == (iconv_t)-1 ) {
+@@ -92,6 +97,7 @@ utfInitialize(void)
+     if ( iconvFromPlatform == (iconv_t)-1 ) {
+         UTF_ERROR("Failed to complete iconv_open() setup");
+     }
++#endif
+ }
+ 
+ /*
+@@ -111,6 +117,7 @@ iconvConvert(iconv_t ic, char *bytes, int len, char *output, int outputMaxLen)
+     output[0] = 0;
+     outputLen = 0;
+ 
++#if !defined(__ANDROID__)
+     if ( ic != (iconv_t)-1 ) {
+         int          returnValue;
+         size_t       inLeft;
+@@ -133,6 +140,7 @@ iconvConvert(iconv_t ic, char *bytes, int len, char *output, int outputMaxLen)
+         UTF_DEBUG(("iconv() failed to do the conversion\n"));
+         return -1;
+     }
++#endif
+ 
+     /* Just copy bytes */
+     outputLen = len;
+diff --git a/src/jdk.jdwp.agent/share/native/libjdwp/utf_util.c b/src/jdk.jdwp.agent/share/native/libjdwp/utf_util.c
+index f5573930d..20f718528 100644
+--- a/src/jdk.jdwp.agent/share/native/libjdwp/utf_util.c
++++ b/src/jdk.jdwp.agent/share/native/libjdwp/utf_util.c
+@@ -479,6 +479,13 @@ static int iconvConvert(conv_direction drn, char *bytes, size_t len, char *outpu
+         return 0;
+     }
+ 
++#if defined(__ANDROID__)
++    /* UMC: Android's platform encoding is UTF-8 and bionic only provides
++       iconv from API 28, so always use the byte-copy path. */
++    (void)memcpy(output, bytes, len);
++    output[len] = 0;
++    return (int)len;
++#else
+     if (codeset == NULL && codeset != (char *) -1) {
+         // locale is not initialized, do it now
+         if (setlocale(LC_ALL, "") != NULL) {
+@@ -530,6 +537,7 @@ just_copy_bytes:
+     (void)memcpy(output, bytes, len);
+     output[len] = 0;
+     return len;
++#endif
+  }
+ 
+ /*

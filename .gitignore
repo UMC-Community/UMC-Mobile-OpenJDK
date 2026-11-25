@@ -1,0 +1,30 @@
+# Upstream checkouts and build output (not tracked)
+/build/
+/out/
+
+# Packaging artifacts
+*.tar.gz
+*.zip
+*.aar
+*.xcframework/
+*.img
+
+# Generated Android project files
+/android/.gradle/
+/android/build/
+/android/*/build/
+/android/local.properties
+/android/umc-jvm/src/main/assets/jre/
+/android/umc-jvm/src/main/jniLibs/
+/android/demo-app/src/main/assets/smoke.jar
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+
+# User-provided test audio (not tracked)
+/android/demo-app/src/main/assets/test.mp3
+
+# Compiled test classes
+/common/tests/classes/
