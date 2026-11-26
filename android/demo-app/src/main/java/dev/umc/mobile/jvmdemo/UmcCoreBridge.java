@@ -27,4 +27,18 @@ public final class UmcCoreBridge {
 
     /** Diagnostic: HTTPS GET through the same reqwest stack, with the error chain. */
     public static native String nativeHttpGet(String url);
+
+    /**
+     * Starts a JVM through UMC Core's embedded launch backend and waits for
+     * {@code main} to finish. Returns {@code status=1} on success.
+     *
+     * @param javaHome     extracted JRE directory
+     * @param spawnHelper  packaged {@code libjspawnhelper.so} path for java.lang.Process
+     * @param classPath    class path containing {@code mainClass}
+     * @param logPath      file that receives the JVM's stdout/stderr
+     * @param options      extra JVM options
+     */
+    public static native String nativeEmbeddedLaunch(String javaHome, String spawnHelper,
+                                                     String classPath, String mainClass,
+                                                     String logPath, String[] options);
 }

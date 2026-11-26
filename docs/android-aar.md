@@ -18,7 +18,7 @@ android/
 | --- | --- | --- |
 | `libjvm.so` | `jni/<abi>/` | HotSpot, loaded as a normal APK native library |
 | `libjspawnhelper.so` | `jni/<abi>/` | `jspawnhelper` renamed so it is unpacked into `nativeLibraryDir` |
-| `libumc_jvm.so` | `jni/<abi>/` | JNI bridge, `DT_NEEDED: libjvm.so` |
+| `libumc_jvm.so` | `jni/<abi>/` | JNI bridge and C API, `DT_NEEDED: libjvm.so` |
 | `lib/modules`, `conf`, `legal`, `lib/*.so` | `assets/jre/<abi>/` | Runtime data, extracted on first launch |
 
 Two ABIs are supported: `arm64-v8a` (devices) and `x86_64` (emulators). At runtime
@@ -30,14 +30,68 @@ Two ABIs are supported: `arm64-v8a` (devices) and `x86_64` (emulators). At runti
    storage** (`context.getFilesDir()`). This only needs normal app permissions; no root.
    The extraction stamp is `PackageInfo.lastUpdateTime`, so app updates force a re-extract
    (otherwise stale `libjava`/`libjvm` would keep being used).
-2. `UmcJvm.create(...)`:
+2. `UmcJvm.create(...)` / `umc_jvm_create(...)`:
    - the bridge sets `UMC_JAVA_HOME` because libjvm is loaded from the APK and HotSpot can no
      longer derive `java.home` from its own path;
    - `JNI_CreateJavaVM` starts HotSpot inside the host process while ART keeps running;
-   - the caller uses `callStatic` / `destroy` afterwards.
+   - the caller uses `callStatic` / `startMain` / `destroy` afterwards.
 3. Nothing is executed as a subprocess from app storage, nothing is written to system
    directories and `/data/local/tmp` is not used. This complies with Android 10+ W^X rules and
    ordinary user permissions.
+
+## Native C API (`umc_jvm.h`)
+
+`libumc_jvm.so` exports a stable C surface for native embedders (UMC Core is the first one):
+
+| Function | Purpose |
+| --- | --- |
+| `umc_jvm_create(java_home, class_path, max_heap_mb, options, count, spawn_helper)` | create the JVM in-process |
+| `umc_jvm_start_main(main_class, args, count)` | run `main(String[])` on a detached native thread and return immediately |
+| `umc_jvm_main_status()` | `-1` not started, `0` running, `1` finished, `2` failed |
+| `umc_jvm_call_static(class, method, signature)` | call a static method returning `String`; release with `umc_jvm_free` |
+| `umc_jvm_redirect_output(path)` | append the JVM's stdout/stderr to a file |
+| `umc_jvm_is_created()` / `umc_jvm_destroy()` | lifecycle helpers |
+
+The Java API in `UmcJvm.java` is a thin wrapper over the same entry points, so both paths share
+one implementation. `JNI_CreateJavaVM` supports one VM per process, so the demo prefers the
+UMC Core backend and only falls back to the Java wrapper when `libumc_android.so` is absent
+(for example on an ABI without UMC Core).
+
+## UMC Core launch abstraction
+
+UMC Core now builds a single `JavaLaunchSpec` (java path, classpath, main class, JVM options,
+game arguments, working directory, console log) and hands it to a backend:
+
+| Backend | Platform | Mechanism |
+| --- | --- | --- |
+| `Process` | desktop | spawns the `java` executable; `GameProcess.pid` is the child pid |
+| `Embedded` | Android | calls the `libumc_jvm` C API; `GameProcess.kind = embedded`, `pid = 0` |
+
+Implementation notes:
+
+- `crates/umc-core/src/launcher.rs` selects the backend from launch configuration; the embedded
+  backend exists when the app sets `UMC_EMBEDDED_JAVA_HOME` (or `UMC_JAVA_HOME`) to the extracted
+  JRE and `UMC_JSPAWNHELPER` to the packaged spawn helper. `StartEmbeddedJvm`-style hosts can
+  instead call `umc_core::start_embedded_jvm(...)` directly.
+- `crates/umc-android/build.rs` links `libumc_jvm.so` from `UMC_JVM_LIB_DIR`.
+- Process state for embedded launches comes from `umc_jvm_main_status()`: finished maps to
+  `exited` (code 0), failed to `failed` (code -1), and "not started" means the JVM disappeared
+  with its host process. Stopping an embedded JVM is not supported yet because it shares the
+  app process; a shutdown hook is required first.
+
+### Building UMC Core for Android
+
+```bash
+export UMC_JVM_LIB_DIR=<AAR>/jni/arm64-v8a     # contains libumc_jvm.so (and libjvm.so)
+export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=<NDK>/aarch64-linux-android26-clang
+export CC_aarch64_linux_android=<NDK>/aarch64-linux-android26-clang
+export AR_aarch64_linux_android=<NDK>/llvm-ar
+cargo build --target aarch64-linux-android --release -p umc-android
+```
+
+`libumc_android.so` then records `DT_NEEDED: libumc_jvm.so`; the app must package both
+libraries in `jniLibs` for the same ABI. At runtime the Android linker resolves
+`libumc_jvm.so` from `nativeLibraryDir`.
 
 ## UMC Core integration (initial)
 
@@ -57,7 +111,8 @@ cp target/aarch64-linux-android/release/libumc_android.so \
 ```
 
 The demo calls `UmcCoreBridge.nativeVersion()` and `nativeVersions(dataDir)`.
-Verified on the F2 tablet:
+It also calls `nativeEmbeddedLaunch(...)`, which starts the JVM through UMC Core's embedded
+backend (Rust → `libumc_jvm` C API) instead of spawning a process. Verified on the F2 tablet:
 
 ```text
 umc core: version 0.1.1
@@ -67,9 +122,35 @@ net(art) : https status 200
 umc versions: 926 available, latest 26.4-pre-1
 ```
 
-Next step: UMC's launch path currently spawns `java`. Android needs an
-embedded-JVM backend that hands the classpath, main class and arguments to the
-`libumc_jvm` C API instead of spawning a process.
+## Verification results 3: embedded launch through UMC Core (arm64 device)
+
+```text
+UMCJVM: creating JVM: home=.../jre-arm64-v8a heap=256MB options=6
+UMCJVM: JNI_CreateJavaVM rc=0
+UMCJVM: starting main: SmokeMain (0 args)
+UMCJVM: main returned
+UMCJVM: embedded launch (umc-core): status=1
+UMCJVM: java says: Hello from JNI, java.version=21.0.14-umc, ...
+UMCJVM: fonts:   families=192, stringWidth=124, ascent=19
+UMCJVM: sound:   mixers=1, lineSupported=true, wrote=176400
+UMCJVM: process: rc=0, out=hello-from-process
+UMCJVM: main:    rc=0, status=1
+UMCJVM: JVM destroyed
+UMCJVM: DONE ✅
+```
+
+`jvm.log` shows the arguments reaching `main` on the detached thread:
+
+```text
+SmokeMain: args=[]
+SmokeMain: thread=Thread-0
+SmokeMain: java.version=21.0.14-umc
+SmokeMain: args=[one, two]
+SmokeMain: thread=Thread-1
+```
+
+Both Android targets (`aarch64-linux-android`, `x86_64-linux-android`) build with
+`DT_NEEDED: libumc_jvm.so`; the desktop (`Process`) backend keeps its existing tests.
 
 ## Test Demo behavior
 

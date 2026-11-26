@@ -65,15 +65,41 @@ public class MainActivity extends Activity {
                         "-XX:-UsePerfData"
                 };
 
-                UmcJvm.redirectOutput(new File(getFilesDir(), "jvm.log").getAbsolutePath());
+                // Preferred path: UMC Core's embedded launch backend, which calls
+                // the libumc_jvm C API from Rust. Falls back to the Java API when
+                // libumc_android.so is not packaged for this ABI.
+                boolean created = false;
+                try {
+                    String helper = new File(getApplicationInfo().nativeLibraryDir,
+                            "libjspawnhelper.so").getAbsolutePath();
+                    String launch = UmcCoreBridge.nativeEmbeddedLaunch(
+                            jre.getAbsolutePath(), helper, jar.getAbsolutePath(), "SmokeMain",
+                            new File(getFilesDir(), "jvm.log").getAbsolutePath(), opts);
+                    append("embedded launch (umc-core): " + launch + "\n");
+                    created = launch.startsWith("status=1");
+                    success &= created;
+                    if (!created) {
+                        append("\nFAILED: embedded JVM launch\n");
+                    }
+                } catch (Throwable t) {
+                    append("embedded launch (umc-core) unavailable: " + t + "\n");
+                }
 
-                t0 = System.currentTimeMillis();
-                int rc = UmcJvm.create(this, jre.getAbsolutePath(), jar.getAbsolutePath(), 256, opts);
-                append(String.format("JNI_CreateJavaVM rc=%d in %d ms\n", rc, System.currentTimeMillis() - t0));
-                if (rc != 0) {
-                    append("\nFAILED: JVM creation rc=" + rc + "\n");
-                    success = false;
-                } else {
+                if (!created) {
+                    UmcJvm.redirectOutput(new File(getFilesDir(), "jvm.log").getAbsolutePath());
+                    t0 = System.currentTimeMillis();
+                    int rc = UmcJvm.create(this, jre.getAbsolutePath(), jar.getAbsolutePath(), 256, opts);
+                    append(String.format("JNI_CreateJavaVM rc=%d in %d ms\n",
+                            rc, System.currentTimeMillis() - t0));
+                    if (rc != 0) {
+                        append("\nFAILED: JVM creation rc=" + rc + "\n");
+                        success = false;
+                    } else {
+                        created = true;
+                    }
+                }
+
+                if (created) {
                     String result = UmcJvm.callStatic("HelloFromJni", "run", "()Ljava/lang/String;");
                     append("java says:\n  " + result + "\n");
                     success &= isGood(result);
@@ -89,6 +115,12 @@ public class MainActivity extends Activity {
                     String proc = UmcJvm.callStatic("HelloFromJni", "runProcess", "()Ljava/lang/String;");
                     append("process:\n  " + proc + "\n");
                     success &= isGood(proc);
+
+                    // Exercises the C API path used by UMC Core on Android:
+                    // start main() on a detached thread and poll its status.
+                    String main = runMainCheck();
+                    append("main:\n  " + main + "\n");
+                    success &= main != null && main.startsWith("rc=0, status=1");
 
                     UmcJvm.destroy();
                     append("\nJVM destroyed\n");
@@ -138,6 +170,28 @@ public class MainActivity extends Activity {
 
     private static boolean isGood(String value) {
         return value != null && !value.contains("FAILED");
+    }
+
+    /**
+     * Starts SmokeMain through the C API surface and waits for it to finish.
+     */
+    private static String runMainCheck() {
+        int rc = UmcJvm.startMain("SmokeMain", new String[]{"one", "two"});
+        if (rc != 0) {
+            return "rc=" + rc + " (start failed)";
+        }
+        long deadline = System.currentTimeMillis() + 5000;
+        int status = UmcJvm.mainStatus();
+        while (status == 0 && System.currentTimeMillis() < deadline) {
+            try {
+                Thread.sleep(50);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+            status = UmcJvm.mainStatus();
+        }
+        return "rc=0, status=" + status;
     }
 
     /**

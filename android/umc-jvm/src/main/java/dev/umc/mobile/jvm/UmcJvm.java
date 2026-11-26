@@ -58,6 +58,20 @@ public final class UmcJvm {
      */
     public static native String callStatic(String className, String methodName, String signature);
 
+    /**
+     * Starts {@code main(String[])} on a detached native thread. This is the Java
+     * counterpart of the libumc_jvm C API used by UMC Core on Android.
+     *
+     * @return 0 if the thread was started
+     */
+    public static native int startMain(String mainClass, String[] args);
+
+    /**
+     * Status of the main started with {@link #startMain}: -1 not started, 0 running,
+     * 1 finished, 2 failed.
+     */
+    public static native int mainStatus();
+
     public static native void destroy();
 
     /**
