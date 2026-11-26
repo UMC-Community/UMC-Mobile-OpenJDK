@@ -16,6 +16,7 @@
 /android/local.properties
 /android/umc-jvm/src/main/assets/jre/
 /android/umc-jvm/src/main/jniLibs/
+/android/demo-app/src/main/jniLibs/
 /android/demo-app/src/main/assets/smoke.jar
 
 # IDE / OS

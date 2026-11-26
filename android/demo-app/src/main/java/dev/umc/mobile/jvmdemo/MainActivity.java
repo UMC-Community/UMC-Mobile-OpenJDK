@@ -92,6 +92,29 @@ public class MainActivity extends Activity {
 
                     UmcJvm.destroy();
                     append("\nJVM destroyed\n");
+
+                    // UMC Core (Rust) embedded in the same process, via JNI.
+                    try {
+                        append("umc core: version " + UmcCoreBridge.nativeVersion());
+                        append("umc tcp : " + UmcCoreBridge.nativeTcpProbe(
+                                "piston-meta.mojang.com", 443));
+                        append("umc https: " + UmcCoreBridge.nativeHttpGet(
+                                "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json"));
+                        append("net(art) : " + artHttpGet(
+                                "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json"));
+                        String json = UmcCoreBridge.nativeVersions(
+                                new File(getFilesDir(), "umc-data").getAbsolutePath());
+                        if (json == null || json.startsWith("ERROR")) {
+                            append("umc versions: " + json);
+                        } else {
+                            org.json.JSONArray arr = new org.json.JSONArray(json);
+                            String latest = arr.length() > 0
+                                    ? arr.getJSONObject(0).optString("id") : "-";
+                            append("umc versions: " + arr.length() + " available, latest " + latest);
+                        }
+                    } catch (Throwable t) {
+                        append("umc core: unavailable (" + t + ")");
+                    }
                 }
             } catch (Throwable t) {
                 success = false;
@@ -115,6 +138,23 @@ public class MainActivity extends Activity {
 
     private static boolean isGood(String value) {
         return value != null && !value.contains("FAILED");
+    }
+
+    /**
+     * ART-side HTTPS probe used as a network baseline for the Rust-side probes.
+     */
+    private static String artHttpGet(String url) {
+        try {
+            java.net.HttpURLConnection c =
+                    (java.net.HttpURLConnection) new java.net.URL(url).openConnection();
+            c.setConnectTimeout(8000);
+            c.setReadTimeout(8000);
+            int code = c.getResponseCode();
+            c.disconnect();
+            return "https status " + code;
+        } catch (Throwable t) {
+            return "failed: " + t;
+        }
     }
 
     /**

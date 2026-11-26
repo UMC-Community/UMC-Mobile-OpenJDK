@@ -39,6 +39,38 @@ Two ABIs are supported: `arm64-v8a` (devices) and `x86_64` (emulators). At runti
    directories and `/data/local/tmp` is not used. This complies with Android 10+ W^X rules and
    ordinary user permissions.
 
+## UMC Core integration (initial)
+
+UMC Core runs in the app process as a JNI cdylib built from
+`UMC/crates/umc-android`. That crate depends on `umc-sdk`, `jni`, Tokio and
+`reqwest` (rustls + webpki roots).
+
+Build it from the UMC workspace with the NDK as linker:
+
+```bash
+export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=<NDK>/aarch64-linux-android26-clang
+export CC_aarch64_linux_android=<NDK>/aarch64-linux-android26-clang
+export AR_aarch64_linux_android=<NDK>/llvm-ar
+cargo build --target aarch64-linux-android --release -p umc-android
+cp target/aarch64-linux-android/release/libumc_android.so \
+   android/demo-app/src/main/jniLibs/arm64-v8a/
+```
+
+The demo calls `UmcCoreBridge.nativeVersion()` and `nativeVersions(dataDir)`.
+Verified on the F2 tablet:
+
+```text
+umc core: version 0.1.1
+umc tcp : dns=2 addr(s); [2603:1061:14:189::1]:443=ok; 150.171.110.133:443=ok
+umc https: status 200 OK
+net(art) : https status 200
+umc versions: 926 available, latest 26.4-pre-1
+```
+
+Next step: UMC's launch path currently spawns `java`. Android needs an
+embedded-JVM backend that hands the classpath, main class and arguments to the
+`libumc_jvm` C API instead of spawning a process.
+
 ## Test Demo behavior
 
 The demo app is labelled **Test Demo**. On launch it extracts the JRE, creates the JVM and
