@@ -26,3 +26,6 @@
 
 # Compiled test classes
 /common/tests/classes/
+/android/demo-app/src/main/assets/lwjgl-core.jar
+/android/demo-app/src/main/assets/lwjgl-glfw.jar
+/android/demo-app/src/main/assets/lwjgl-opengl.jar

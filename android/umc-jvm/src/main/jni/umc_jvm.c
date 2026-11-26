@@ -34,8 +34,20 @@ static JavaVM *g_vm = NULL;
 static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
 static atomic_int g_main_status = UMC_JVM_MAIN_NOT_STARTED;
 
-static char *dup_utf(JNIEnv *env, jstring s) {
-    if (s == NULL) {
+/* JNI FindClass expects a binary name with '/' separators. */
+static char *jni_class_name(const char *name) {
+    char *out = strdup(name);
+    if (out != NULL) {
+        for (char *p = out; *p != '\0'; p++) {
+            if (*p == '.') {
+                *p = '/';
+            }
+        }
+    }
+    return out;
+}
+
+static char *dup_utf(JNIEnv *env, jstring s) {    if (s == NULL) {
         return NULL;
     }
     const char *c = (*env)->GetStringUTFChars(env, s, NULL);
@@ -101,6 +113,7 @@ int umc_jvm_create(const char *java_home, const char *class_path, int max_heap_m
     }
     JavaVMOption *opts = (JavaVMOption *) calloc((size_t) n, sizeof(JavaVMOption));
     char **bufs = (char **) calloc((size_t) n, sizeof(char *));
+    jint rc = JNI_ERR;
     if (opts == NULL || bufs == NULL) {
         free(opts);
         free(bufs);
@@ -109,23 +122,36 @@ int umc_jvm_create(const char *java_home, const char *class_path, int max_heap_m
     }
 
     int i = 0;
-    bufs[i] = (char *) malloc(4096);
-    snprintf(bufs[i], 4096, "-Djava.home=%s", java_home);
+    bufs[i] = (char *) malloc(strlen(java_home) + 16);
+    if (bufs[i] == NULL) {
+        goto fail;
+    }
+    sprintf(bufs[i], "-Djava.home=%s", java_home);
     opts[i].optionString = bufs[i];
     i++;
 
-    bufs[i] = (char *) malloc(4096);
-    snprintf(bufs[i], 4096, "-Djava.class.path=%s", class_path);
+    /* Minecraft's class path is far larger than any fixed buffer; allocate it. */
+    bufs[i] = (char *) malloc(strlen(class_path) + 32);
+    if (bufs[i] == NULL) {
+        goto fail;
+    }
+    sprintf(bufs[i], "-Djava.class.path=%s", class_path);
     opts[i].optionString = bufs[i];
     i++;
 
     bufs[i] = (char *) malloc(64);
+    if (bufs[i] == NULL) {
+        goto fail;
+    }
     snprintf(bufs[i], 64, "-Xmx%dM", max_heap_mb);
     opts[i].optionString = bufs[i];
     i++;
 
     for (int k = 0; k < option_count && i < n; k++) {
         bufs[i] = strdup(options[k] != NULL ? options[k] : "");
+        if (bufs[i] == NULL) {
+            goto fail;
+        }
         opts[i].optionString = bufs[i];
         i++;
     }
@@ -163,14 +189,16 @@ int umc_jvm_create(const char *java_home, const char *class_path, int max_heap_m
     args.ignoreUnrecognized = JNI_FALSE;
 
     JNIEnv *venv = NULL;
-    LOGI("creating JVM: home=%s heap=%dMB options=%d", java_home, max_heap_mb, i);
-    jint rc = JNI_CreateJavaVM(&g_vm, &venv, &args);
+    LOGI("creating JVM: home=%s heap=%dMB options=%d classpath=%zu bytes",
+         java_home, max_heap_mb, i, strlen(class_path));
+    rc = JNI_CreateJavaVM(&g_vm, &venv, &args);
     LOGI("JNI_CreateJavaVM rc=%d", (int) rc);
     if (rc != JNI_OK) {
         g_vm = NULL;
         LOGE("JVM creation failed (rc=%d)", (int) rc);
     }
 
+fail:
     for (int k = 0; k < i; k++) {
         free(bufs[k]);
     }
@@ -196,7 +224,9 @@ char *umc_jvm_call_static(const char *class_name, const char *method,
     }
 
     char *result = NULL;
-    jclass cls = (*venv)->FindClass(venv, class_name);
+    char *binary = jni_class_name(class_name);
+    jclass cls = binary != NULL ? (*venv)->FindClass(venv, binary) : NULL;
+    free(binary);
     if (cls == NULL) {
         LOGE("class not found: %s", class_name);
         (*venv)->ExceptionClear(venv);
@@ -256,13 +286,23 @@ static void *main_thread(void *opaque) {
         return NULL;
     }
 
-    jclass cls = (*env)->FindClass(env, call->main_class);
-    if (cls == NULL) {
-        LOGE("main class not found: %s", call->main_class);
-        (*env)->ExceptionClear(env);
+    char *binary_name = jni_class_name(call->main_class);
+    if (binary_name == NULL) {
         atomic_store(&g_main_status, UMC_JVM_MAIN_FAILED);
         goto done;
     }
+    jclass cls = (*env)->FindClass(env, binary_name);
+    if (cls == NULL) {
+        LOGE("main class not found: %s", call->main_class);
+        if ((*env)->ExceptionCheck(env)) {
+            (*env)->ExceptionDescribe(env);
+            (*env)->ExceptionClear(env);
+        }
+        free(binary_name);
+        atomic_store(&g_main_status, UMC_JVM_MAIN_FAILED);
+        goto done;
+    }
+    free(binary_name);
 
     jmethodID mid = (*env)->GetStaticMethodID(env, cls, "main", "([Ljava/lang/String;)V");
     if (mid == NULL) {

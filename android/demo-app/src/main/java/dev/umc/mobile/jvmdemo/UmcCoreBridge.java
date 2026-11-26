@@ -41,4 +41,13 @@ public final class UmcCoreBridge {
     public static native String nativeEmbeddedLaunch(String javaHome, String spawnHelper,
                                                      String classPath, String mainClass,
                                                      String logPath, String[] options);
+
+    /**
+     * Installs a vanilla Minecraft version through UMC Core and launches it on
+     * the embedded JVM. The game keeps running after this call returns.
+     */
+    public static native String nativeInstallAndLaunch(String dataDir, String version,
+                                                       String username, String javaHome,
+                                                       String spawnHelper, String libraryDir,
+                                                       String cacheDir);
 }

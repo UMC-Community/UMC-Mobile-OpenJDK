@@ -53,7 +53,12 @@ echo "==> generating smoke.jar"
 SMOKE_CLASSES="$ROOT/build/out/smoke-classes"
 rm -rf "$SMOKE_CLASSES"
 mkdir -p "$SMOKE_CLASSES" "$DEMO/src/main/assets"
-javac -d "$SMOKE_CLASSES" "$ROOT/platforms/android/jni/HelloFromJni.java" "$ROOT/platforms/android/jni/SmokeMain.java"
+javac -cp "$DEMO/src/main/assets/lwjgl-core.jar:$DEMO/src/main/assets/lwjgl-glfw.jar:$DEMO/src/main/assets/lwjgl-opengl.jar" \
+  -d "$SMOKE_CLASSES" \
+  "$ROOT/platforms/android/jni/HelloFromJni.java" \
+  "$ROOT/platforms/android/jni/SmokeMain.java" \
+  "$ROOT/platforms/android/jni/LwjglProbe.java" \
+  "$ROOT/platforms/android/jni/GfxProbe.java"
 ( cd "$SMOKE_CLASSES" && jar cf "$DEMO/src/main/assets/smoke.jar" . )
 
 mb() { du -sb "$1" | awk '{printf "%.1f MB", $1/1048576}'; }

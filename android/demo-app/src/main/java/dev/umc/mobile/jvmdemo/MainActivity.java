@@ -57,12 +57,27 @@ public class MainActivity extends Activity {
                 long t0 = System.currentTimeMillis();
                 File jre = UmcJvm.extractJreForHost(this, getFilesDir());
                 File jar = UmcJvm.extractAsset(this, "smoke.jar", new File(getFilesDir(), "smoke.jar"));
+                File lwjglJar = UmcJvm.extractAsset(this, "lwjgl-core.jar",
+                        new File(getFilesDir(), "lwjgl-core.jar"));
+                File lwjglGlfwJar = UmcJvm.extractAsset(this, "lwjgl-glfw.jar",
+                        new File(getFilesDir(), "lwjgl-glfw.jar"));
+                File lwjglOpenglJar = UmcJvm.extractAsset(this, "lwjgl-opengl.jar",
+                        new File(getFilesDir(), "lwjgl-opengl.jar"));
+                String classPath = jar.getAbsolutePath() + ":" + lwjglJar.getAbsolutePath()
+                        + ":" + lwjglGlfwJar.getAbsolutePath() + ":" + lwjglOpenglJar.getAbsolutePath();
                 append(String.format("extracted JRE in %d ms\n  %s\n", System.currentTimeMillis() - t0, jre));
 
                 String[] opts = {
                         "-Djava.io.tmpdir=" + getCacheDir().getAbsolutePath(),
                         "-Xrs",
-                        "-XX:-UsePerfData"
+                        "-XX:-UsePerfData",
+                        "-Djava.library.path=" + getApplicationInfo().nativeLibraryDir,
+                        "-Dorg.lwjgl.librarypath=" + getApplicationInfo().nativeLibraryDir,
+                        "-Dorg.lwjgl.glfw.libname=libglfw.so",
+                        "-Dorg.lwjgl.opengl.libname=libOSMesa.so",
+                        "-Dorg.lwjgl.util.Debug=true",
+                        "-Dorg.lwjgl.util.DebugLoader=true",
+                        "-Dorg.lwjgl.util.NoChecks=true"
                 };
 
                 // Preferred path: UMC Core's embedded launch backend, which calls
@@ -73,7 +88,7 @@ public class MainActivity extends Activity {
                     String helper = new File(getApplicationInfo().nativeLibraryDir,
                             "libjspawnhelper.so").getAbsolutePath();
                     String launch = UmcCoreBridge.nativeEmbeddedLaunch(
-                            jre.getAbsolutePath(), helper, jar.getAbsolutePath(), "SmokeMain",
+                            jre.getAbsolutePath(), helper, classPath, "SmokeMain",
                             new File(getFilesDir(), "jvm.log").getAbsolutePath(), opts);
                     append("embedded launch (umc-core): " + launch + "\n");
                     created = launch.startsWith("status=1");
@@ -88,7 +103,7 @@ public class MainActivity extends Activity {
                 if (!created) {
                     UmcJvm.redirectOutput(new File(getFilesDir(), "jvm.log").getAbsolutePath());
                     t0 = System.currentTimeMillis();
-                    int rc = UmcJvm.create(this, jre.getAbsolutePath(), jar.getAbsolutePath(), 256, opts);
+                    int rc = UmcJvm.create(this, jre.getAbsolutePath(), classPath, 256, opts);
                     append(String.format("JNI_CreateJavaVM rc=%d in %d ms\n",
                             rc, System.currentTimeMillis() - t0));
                     if (rc != 0) {
@@ -115,6 +130,16 @@ public class MainActivity extends Activity {
                     String proc = UmcJvm.callStatic("HelloFromJni", "runProcess", "()Ljava/lang/String;");
                     append("process:\n  " + proc + "\n");
                     success &= isGood(proc);
+
+                    // LWJGL core natives built for Android (liblwjgl.so).
+                    String lwjgl = UmcJvm.callStatic("LwjglProbe", "run", "()Ljava/lang/String;");
+                    append("lwjgl:\n  " + lwjgl + "\n");
+                    success &= lwjgl != null && lwjgl.startsWith("lwjgl 3.3.3");
+
+                    // GLFW (null + OSMesa) and OpenGL through libOSMesa.
+                    String gfx = UmcJvm.callStatic("GfxProbe", "run", "()Ljava/lang/String;");
+                    append("gfx:\n  " + gfx + "\n");
+                    success &= gfx != null && gfx.startsWith("gl 3.3");
 
                     // Exercises the C API path used by UMC Core on Android:
                     // start main() on a detached thread and poll its status.
