@@ -8,7 +8,7 @@ include $(PREBUILT_SHARED_LIBRARY)
 
 include $(CLEAR_VARS)
 LOCAL_MODULE := umc_jvm
-LOCAL_SRC_FILES := umc_jvm.c
+LOCAL_SRC_FILES := umc_jvm.c umc_display.c
 LOCAL_SHARED_LIBRARIES := jvm
-LOCAL_LDLIBS := -llog
+LOCAL_LDLIBS := -llog -landroid
 include $(BUILD_SHARED_LIBRARY)

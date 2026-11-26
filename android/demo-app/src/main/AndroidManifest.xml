@@ -21,6 +21,7 @@
         <activity
             android:name=".McActivity"
             android:configChanges="orientation|screenSize|keyboardHidden"
+            android:screenOrientation="sensorLandscape"
             android:exported="true" />
     </application>
 </manifest>

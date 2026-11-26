@@ -36,6 +36,9 @@ usable:
    `RenderSystem.initRenderer`, crashing with a `Window resize` NPE.
 4. `umc_bridge.c`: export input injection (`umcGlfwInjectKey/Char/MouseButton/CursorPos/Scroll/
    Resize/Focus`) and framebuffer access (`umcGlfwFramebuffer`, `umcGlfwDesktopSize`).
+5. `osmesa_context.c`: `glfwSwapBuffers` must call `glFinish` on OSMesa. OSMesa keeps its render
+   target internal and only copies it into the user buffer on `glFlush`/`glFinish`; without the
+   flush the framebuffer stays black even though the game renders.
 
 ## JVM configuration
 
@@ -66,6 +69,29 @@ Minecraft's relative paths (`logs/latest.log`) must resolve inside the instance'
   `Setting user`, `Backend library: LWJGL 3.3.3+5`, resource atlases created,
   `OpenAL initialized on device OpenSL`, `Sound engine started`. The process then keeps
   rendering the main menu into the OSMesa buffer.
+
+## Zink (hardware) feasibility: blocked on this device
+
+Mesa 23.3.6 was also built with the Zink Gallium driver (Vulkan-backed) and tested on the F2
+tablet. The device exposes one Vulkan 1.1.131 PowerVR Rogue GE8320 device with 52 extensions,
+but Zink rejects it: Mesa's Zink requires `VK_KHR_timeline_semaphore` (or Vulkan 1.2 timeline
+semaphores), which this driver does not provide. Hardware acceleration through Zink is
+therefore not possible on this tablet; a device with Vulkan 1.2+ (Adreno/Mali) would be needed.
+
+## Performance
+
+Softpipe is an interpreter without SIMD and cannot rasterize Minecraft's world/panorama at an
+acceptable rate on the MT6765. Measured with the swap counter (real rendered frames):
+
+- 854x480: ~4 fps (20 frames / 5 s) on the accessibility screen.
+- 640x360: ~5.6 fps peak, ~1 fps during heavy loading shader phases.
+- 480x270 + menu blur off + performance governor: 20-28 frames / 5 s (~4-5.6 fps), dropping to
+  ~1 fps when the menu panorama renders.
+
+The runtime therefore writes mobile defaults (`menuBackgroundBlurriness=0`, `maxFps=30`,
+`renderDistance=4`, fast graphics, minimal particles) and uses a 480x270 window upscaled to the
+SurfaceView. The next software improvement would be llvmpipe (LLVM JIT), which needs a
+cross-built LLVM for Android.
 
 ## Still missing
 
